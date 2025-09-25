@@ -1,0 +1,53 @@
+# 1) go to your DWI directory
+cd /wynton/scratch/aleberre/projects/Ginkgo_pipeline/data_in/sub-PR07/ses-20250106/dwi
+
+# 2) ensure python + libraries are available
+module load python 2>/dev/null || true
+python3 -m pip install --user --quiet --upgrade pip
+python3 -m pip install --user --quiet nibabel numpy
+
+# 3) split the 4D DWI into shells and write per-shell bval/bvec
+python3 - <<'PY'
+import numpy as np, nibabel as nib, os
+
+bval_path = "dwi.bval"
+bvec_path = "dwi.bvec"
+nii_path  = "dwi.nii.gz"
+shells    = [0, 500, 1000, 2000, 3000]
+tol       = 50  # tolerance for matching b-values
+
+# read gradients
+bvals = np.loadtxt(bval_path)
+bvecs = np.loadtxt(bvec_path)  # shape (3, N)
+
+# load 4D dwi
+img  = nib.load(nii_path)
+data = img.get_fdata()
+aff  = img.affine
+hdr  = img.header
+
+print(f"Loaded {nii_path} with shape {data.shape} and {bvals.size} volumes")
+assert data.ndim == 4 and data.shape[-1] == bvals.size == bvecs.shape[1], "Mismatched volumes vs bvals/bvecs"
+
+for b in shells:
+    idx = np.where((bvals >= b - tol) & (bvals <= b + tol))[0]
+    if idx.size == 0:
+        print(f"[skip] b={b}: no volumes")
+        continue
+
+    tag = f"b{b:04d}"
+    out_nii  = f"dwi_{tag}.nii.gz"
+    out_bval = f"dwi_{tag}.bval"
+    out_bvec = f"dwi_{tag}.bvec"
+
+    sub = data[..., idx]
+    nib.Nifti1Image(sub, aff, hdr).to_filename(out_nii)
+    np.savetxt(out_bval, bvals[idx][None, :], fmt="%.0f")
+    np.savetxt(out_bvec, bvecs[:, idx], fmt="%.6f")
+
+    print(f"[ok]  {out_nii}  vols={idx.size}")
+    print(f"     {out_bval} / {out_bvec}")
+PY
+
+# 4) check results
+ls -lh dwi_b*.nii.gz dwi_b*.bval dwi_b*.bvec
